@@ -2,15 +2,31 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!--
-      BrowserTabActivity is already fully declared by MSAL's own AAR manifest.
-      We do NOT redeclare it here — that caused the placeholder and merger conflicts.
-
-      The app's AndroidManifest.xml must declare the BrowserTabActivity intent-filter
-      with the app-specific msauth redirect URI. See the plugin README for instructions.
-    -->
-
+    <!-- Permissions required by MSAL -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <application>
+        <!-- 
+          Auto-inject BrowserTabActivity into the host app's manifest.
+          We use \${applicationId} (which evaluates to the host app's package name automatically, e.g. com.solum.epapersignage)
+          and pathPattern=".*" to accept any redirect key hash dynamically.
+        -->
+        <activity
+            android:name="com.microsoft.identity.client.BrowserTabActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout"
+            android:exported="true"
+            tools:replace="android:configChanges">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="msauth"
+                    android:host="${applicationId}"
+                    android:pathPattern=".*" />
+            </intent-filter>
+        </activity>
+    </application>
 
 </manifest>

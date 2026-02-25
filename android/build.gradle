@@ -42,10 +42,13 @@ repositories {
     mavenCentral()
 }
 
-allprojects {
+// Automatically inject the Azure DevOps maven feed into the host app's rootProject
+// This is required for MSAL 5.x transitive dependencies (e.g. display-mask)
+rootProject.allprojects {
     repositories {
         maven {
             url 'https://pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/_packaging/Duo-SDK-Feed/maven/v1'
+            name 'Azure-Duo-SDK-Feed'
         }
     }
 }
