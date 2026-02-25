@@ -4,20 +4,19 @@
 [![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20Android-lightgrey)]()
 [![Capacitor](https://img.shields.io/badge/Capacitor-7.x-3880ff)]()
 
-> **Drop-in replacement** for `@recognizebv/capacitor-plugin-msauth` — with **automatic Android manifest injection** (no more manual `AndroidManifest.xml` edits) and all **production iOS bug fixes** built in.
+> **Drop-in replacement** for `@recognizebv/capacitor-plugin-msauth` — with the same simple setup and all **production iOS bug fixes** built in.
 
 ---
 
 ## Why this plugin?
 
-Every time a developer clones the app and runs a fresh build, the original `@recognizebv/capacitor-plugin-msauth` requires manual steps that are easy to forget:
+Same simple setup as `@recognizebv/capacitor-plugin-msauth`, plus production iOS bug fixes:
 
-| Problem with the original plugin | How this plugin fixes it |
-|---|---|
-| Must manually add `BrowserTabActivity` to `AndroidManifest.xml` | ✅ Automatically merged by Gradle — **zero manual edits needed** |
-| Must manually add MSAL Maven repo to `android/build.gradle` | ✅ Bundled in the plugin's own `build.gradle` |
-| iOS double login popup (silent fail → interactive → 2nd popup) | ✅ Fixed: `prompt='none'` rejects silently; TS layer controls fallback |
-| iOS single-account cache miss causes `getCurrentAccount()` network call → returns nil on B2C → surprise interactive popup | ✅ Fixed: uses local keychain cache for `>= 1` accounts |
+| Improvement over the original plugin |
+|---|
+| ✅ iOS double login popup fixed: `prompt='none'` rejects silently; TS layer controls fallback |
+| ✅ iOS B2C silent login fixed: uses local keychain cache for cached accounts |
+| ✅ MSAL 5.10.0 (latest) with all transitive dependencies resolved |
 
 ---
 
@@ -33,36 +32,52 @@ npm install github:solumApps/solum-msal-capacitor-plugin
 npm install file:../solum-msal-capacitor-plugin
 ```
 
-### Step 2 — Configure the key hash in `capacitor.config.ts`
+### Step 2 — Add the MSAL Maven repository to `android/build.gradle`
 
-Open your app's `capacitor.config.ts` and add the `MsAuthPlugin` section:
+In your root `android/build.gradle`, add the Duo SDK feed inside the `allprojects` block:
 
-```typescript
-import { CapacitorConfig } from '@capacitor/cli';
-
-const config: CapacitorConfig = {
-  appId: 'com.solum.epapersignage',
-  appName: 'Solum E-Paper',
-  webDir: 'www',
-  plugins: {
-    MsAuthPlugin: {
-      // Base64-encoded SHA1 of your Android signing keystore.
-      // This is the SAME hash you registered in the Azure AD portal.
-      MSAUTH_KEY_HASH: 'YjJKs6ZnnuUT7eag1UhbBKej/1o='
+```groovy
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        // Required for MSAL 5.x transitive dependency: com.microsoft.device.display:display-mask
+        maven {
+            url 'https://pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/_packaging/Duo-SDK-Feed/maven/v1'
+        }
     }
-  }
-};
-
-export default config;
+}
 ```
 
-### Step 3 — Sync native projects
+### Step 3 — Add `BrowserTabActivity` to your app's `AndroidManifest.xml`
+
+Inside the `<application>` tag in `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<!-- MSAL BrowserTabActivity — handles OAuth2 redirect after Microsoft login -->
+<activity
+    android:name="com.microsoft.identity.client.BrowserTabActivity"
+    android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout"
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data
+            android:scheme="msauth"
+            android:host="YOUR_APP_PACKAGE_NAME"
+            android:pathPattern=".*" />
+    </intent-filter>
+</activity>
+```
+
+Replace `YOUR_APP_PACKAGE_NAME` with your app ID (e.g. `com.solum.epapersignage`).
+
+### Step 4 — Sync native projects
 
 ```bash
 npx cap sync
 ```
-
-That's it for Android. The plugin automatically merges `BrowserTabActivity` into your `AndroidManifest.xml`.
 
 ### Step 4 — iOS setup (4 steps, one-time per Xcode project)
 
@@ -183,15 +198,14 @@ npm uninstall @recognizebv/capacitor-plugin-msauth
 # 2. Install this plugin
 npm install github:solumApps/solum-msal-capacitor-plugin
 
-# 3. Update the two import lines (see "Usage" section above)
+# 3. Update import lines (see "Usage" section above)
 
-# 4. Add MSAUTH_KEY_HASH to capacitor.config.ts (see "Installation" above)
+# 4. Add the Duo SDK Maven repo to android/build.gradle (see Step 2 above)
 
-# 5. Sync
+# 5. Ensure BrowserTabActivity is in your app AndroidManifest.xml (see Step 3 above)
+
+# 6. Sync
 npx cap sync
-
-# 6. Remove the manually-added BrowserTabActivity from your AndroidManifest.xml
-#    (the plugin now injects it automatically)
 ```
 
 ---
@@ -257,20 +271,14 @@ The output (e.g. `YjJKs6ZnnuUT7eag1UhbBKej/1o=`) is what you register in the Azu
 
 ---
 
-## How the Android Auto-Injection Works
+## How the Android Redirect Works
 
-When you run `npx cap sync`, Capacitor:
-1. Reads `MSAUTH_KEY_HASH` from `capacitor.config.ts`
-2. Passes it to the plugin's `android/build.gradle` as a Gradle property
-3. The plugin's `android/build.gradle` injects it into `manifestPlaceholders`
-4. Android Gradle's manifest merger combines the plugin's `AndroidManifest.xml` with the app's manifest
-5. The result contains a fully configured `BrowserTabActivity` — no manual changes needed
+The plugin builds the MSAL redirect URI dynamically at runtime:
+```
+msauth://<your.package.name>/<urlEncodedKeyHash>
+```
 
-```
-capacitor.config.ts          Plugin                     App AndroidManifest.xml
-  MSAUTH_KEY_HASH     →   build.gradle          →      <BrowserTabActivity>
-  'YjJKs6Z...'           manifestPlaceholders            msauth://com.solum.../YjJKs6Z...
-```
+The `BrowserTabActivity` in your `AndroidManifest.xml` uses `pathPattern=".*"` to catch any key hash without hardcoding it.
 
 ---
 
@@ -278,13 +286,12 @@ capacitor.config.ts          Plugin                     App AndroidManifest.xml
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Android: Auth redirect fails / activity not found | Key hash is wrong or not set | Re-generate key hash for your exact signing keystore; ensure `MSAUTH_KEY_HASH` is set in `capacitor.config.ts` |
-| Android: `MISSING_KEY_HASH` in redirect URI | `MSAUTH_KEY_HASH` not set in `capacitor.config.ts` | Add it under `plugins.MsAuthPlugin.MSAUTH_KEY_HASH` |
-| Android: MSAL init error / config error | Invalid `authorityUrl` or `clientId` | Double-check values against Azure AD portal settings |
+| Android: Auth redirect fails / activity not found | `BrowserTabActivity` missing from app manifest | Add it following Step 3 in Installation |
+| Android: `display-mask` resolve error | Duo SDK Maven feed missing from `android/build.gradle` | Add it following Step 2 in Installation |
+| Android: MSAL init error / config error | Invalid `authorityUrl`, `clientId`, or `keyHash` | Double-check values against Azure AD portal settings |
 | iOS: Login popup appears twice | Old `@recognizebv` plugin still installed | Uninstall old plugin, clean Xcode derived data (`Cmd+Shift+K`) |
 | iOS: `No cached account after re-launch` | Keychain group missing | Add `com.microsoft.adalcache` in Xcode Signing & Capabilities → Keychain Sharing |
 | `UNIMPLEMENTED` error on login/logout | Objective-C bridge out of sync | Run `npx cap sync`, then clean and rebuild in Xcode |
-| Build error: BrowserTabActivity duplicate | Leftover manual entry in app's `AndroidManifest.xml` | Remove the manually-added `BrowserTabActivity` activity block from the app manifest |
 
 ---
 
