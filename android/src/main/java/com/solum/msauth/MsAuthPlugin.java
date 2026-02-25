@@ -16,7 +16,7 @@ import com.microsoft.identity.client.AuthenticationCallback;
 import com.microsoft.identity.client.IAccount;
 import com.microsoft.identity.client.IAuthenticationResult;
 import com.microsoft.identity.client.IMultipleAccountPublicClientApplication;
-import com.microsoft.identity.client.IPublicClientApplication;
+import com.microsoft.identity.client.IMultipleAccountApplicationCreatedListener;
 import com.microsoft.identity.client.Prompt;
 import com.microsoft.identity.client.PublicClientApplication;
 import com.microsoft.identity.client.exception.MsalException;
@@ -34,13 +34,6 @@ import java.util.List;
 
 /**
  * SolumMsauth — Android native implementation of MsAuthPlugin.
- *
- * Responsibilities:
- *  1. Build an MSAL PublicClientApplication config dynamically from the
- *     options passed by the JavaScript layer (clientId, tenant, authority
- *     URL, scopes, etc.).
- *  2. Perform interactive or silent token acquisition.
- *  3. Handle logout for multi-account scenarios.
  */
 @CapacitorPlugin(name = "MsAuthPlugin")
 public class MsAuthPlugin extends Plugin {
@@ -105,12 +98,10 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IPublicClientApplication.ApplicationCreatedListener() {
+            new IMultipleAccountApplicationCreatedListener() {
                 @Override
-                public void onCreated(IPublicClientApplication application) {
-                    IMultipleAccountPublicClientApplication multiApp =
-                        (IMultipleAccountPublicClientApplication) application;
-                    performMultiAccountLogin(call, multiApp, scopes, prompt, isSilentOnly, activity);
+                public void onCreated(IMultipleAccountPublicClientApplication application) {
+                    performMultiAccountLogin(call, application, scopes, prompt, isSilentOnly, activity);
                 }
 
                 @Override
@@ -159,29 +150,28 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IPublicClientApplication.ApplicationCreatedListener() {
+            new IMultipleAccountApplicationCreatedListener() {
                 @Override
-                public void onCreated(IPublicClientApplication application) {
-                    IMultipleAccountPublicClientApplication multiApp =
-                        (IMultipleAccountPublicClientApplication) application;
+                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
                     try {
                         List<IAccount> accounts = multiApp.getAccounts();
                         if (accounts.isEmpty()) {
                             call.reject("Nothing to sign out from.");
                             return;
                         }
-                        multiApp.removeAccount(accounts.get(0), new IMultipleAccountPublicClientApplication.RemoveAccountCallback() {
-                            @Override
-                            public void onRemoved() {
-                                call.resolve();
-                            }
+                        multiApp.removeAccount(accounts.get(0),
+                            new IMultipleAccountPublicClientApplication.RemoveAccountCallback() {
+                                @Override
+                                public void onRemoved() {
+                                    call.resolve();
+                                }
 
-                            @Override
-                            public void onError(MsalException exception) {
-                                Log.e(TAG, "Logout error", exception);
-                                call.reject("Logout failed: " + exception.getMessage());
-                            }
-                        });
+                                @Override
+                                public void onError(MsalException exception) {
+                                    Log.e(TAG, "Logout error", exception);
+                                    call.reject("Logout failed: " + exception.getMessage());
+                                }
+                            });
                     } catch (Exception e) {
                         Log.e(TAG, "getAccounts error during logout", e);
                         call.reject("Logout error: " + e.getMessage());
@@ -234,11 +224,9 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IPublicClientApplication.ApplicationCreatedListener() {
+            new IMultipleAccountApplicationCreatedListener() {
                 @Override
-                public void onCreated(IPublicClientApplication application) {
-                    IMultipleAccountPublicClientApplication multiApp =
-                        (IMultipleAccountPublicClientApplication) application;
+                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
                     try {
                         List<IAccount> accounts = multiApp.getAccounts();
                         if (accounts.isEmpty()) {
@@ -247,21 +235,20 @@ public class MsAuthPlugin extends Plugin {
                         }
                         final int[] remaining = { accounts.size() };
                         for (IAccount account : accounts) {
-                            multiApp.removeAccount(account, new IMultipleAccountPublicClientApplication.RemoveAccountCallback() {
-                                @Override
-                                public void onRemoved() {
-                                    remaining[0]--;
-                                    if (remaining[0] == 0) {
-                                        call.resolve();
+                            multiApp.removeAccount(account,
+                                new IMultipleAccountPublicClientApplication.RemoveAccountCallback() {
+                                    @Override
+                                    public void onRemoved() {
+                                        remaining[0]--;
+                                        if (remaining[0] == 0) call.resolve();
                                     }
-                                }
 
-                                @Override
-                                public void onError(MsalException exception) {
-                                    Log.e(TAG, "logoutAll account error", exception);
-                                    call.reject("Logout error: " + exception.getMessage());
-                                }
-                            });
+                                    @Override
+                                    public void onError(MsalException exception) {
+                                        Log.e(TAG, "logoutAll account error", exception);
+                                        call.reject("Logout error: " + exception.getMessage());
+                                    }
+                                });
                         }
                     } catch (Exception e) {
                         Log.e(TAG, "getAccounts error during logoutAll", e);
@@ -308,7 +295,7 @@ public class MsAuthPlugin extends Plugin {
                         public void onError(MsalException exception) {
                             if (exception instanceof MsalUiRequiredException) {
                                 if (isSilentOnly) {
-                                    call.reject("Silent login failed: interaction required but silent-only mode active.");
+                                    call.reject("Silent login failed: interaction required.");
                                     return;
                                 }
                                 acquireTokenInteractively(call, app, scopes, prompt, activity);
@@ -324,7 +311,6 @@ public class MsAuthPlugin extends Plugin {
                         }
                     })
                     .build();
-
                 app.acquireTokenSilentAsync(silentParams);
             } else {
                 if (isSilentOnly) {
@@ -368,7 +354,6 @@ public class MsAuthPlugin extends Plugin {
                 }
             })
             .build();
-
         app.acquireToken(tokenParams);
     }
 
@@ -391,13 +376,9 @@ public class MsAuthPlugin extends Plugin {
         config.put("account_mode", "MULTIPLE");
 
         JSONObject authority = new JSONObject();
-        String effectiveAuthorityUrl;
-
-        if (authorityUrl != null && !authorityUrl.isEmpty()) {
-            effectiveAuthorityUrl = authorityUrl;
-        } else {
-            effectiveAuthorityUrl = "https://login.microsoftonline.com/" + tenant;
-        }
+        String effectiveAuthorityUrl = (authorityUrl != null && !authorityUrl.isEmpty())
+            ? authorityUrl
+            : "https://login.microsoftonline.com/" + tenant;
 
         if ("B2C".equalsIgnoreCase(authorityType)) {
             authority.put("type", "B2C");
@@ -438,8 +419,6 @@ public class MsAuthPlugin extends Plugin {
             case "login":   return Prompt.LOGIN;
             case "consent": return Prompt.CONSENT;
             case "create":  return Prompt.CREATE;
-            case "none":
-            case "select_account":
             default:        return Prompt.SELECT_ACCOUNT;
         }
     }
@@ -449,13 +428,11 @@ public class MsAuthPlugin extends Plugin {
         ret.put("accessToken", authResult.getAccessToken());
         String idToken = authResult.getAccount().getIdToken();
         ret.put("idToken", idToken != null ? idToken : "");
-
         JSArray scopesArray = new JSArray();
         for (String s : authResult.getScope()) {
             scopesArray.put(s);
         }
         ret.put("scopes", scopesArray);
-
         call.resolve(ret);
     }
 }
