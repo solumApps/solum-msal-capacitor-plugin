@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================
+  @solum/capacitor-msauth — Android Plugin Manifest
+  ============================================================
+  This file is AUTOMATICALLY MERGED into the host app's
+  AndroidManifest.xml by Android Gradle manifest merger when
+  you run: npx cap sync
+
+  ✅ You do NOT need to touch the app's AndroidManifest.xml.
+
+  How the placeholders work:
+    ${applicationId}    → replaced by Gradle with your app's
+                          package name (e.g. com.solum.epapersignage)
+    ${MSAUTH_KEY_HASH}  → replaced from the plugin variable you
+                          set in capacitor.config.ts (see README)
+  ============================================================
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.solum.msauth">
+
+    <application>
+        <!--
+          BrowserTabActivity handles the MSAL OAuth2 redirect after
+          the browser-based authentication completes.
+
+          The redirect URI registered in Azure AD portal is:
+            msauth://<your_package_name>/<base64_key_hash>
+
+          Example:
+            msauth://com.solum.epapersignage/YjJKs6ZnnuUT7eag1UhbBKej%2F1o%3D
+
+          NOTE: The '/' in the key hash is URL-encoded as %2F automatically
+          by MSAL; the raw '/' character below is intentional.
+        -->
+        <activity
+            android:name="com.microsoft.identity.client.BrowserTabActivity"
+            android:configChanges="orientation|screenSize"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="msauth"
+                    android:host="${applicationId}"
+                    android:path="/${MSAUTH_KEY_HASH}" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

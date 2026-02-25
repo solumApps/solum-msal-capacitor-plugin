@@ -1,0 +1,39 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace "com.solum.msauth"
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
+
+    defaultConfig {
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 26
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
+
+        // -----------------------------------------------------------------------
+        // Capacitor Plugin Variables
+        //
+        //  MSAUTH_KEY_HASH — Base64-encoded SHA1 of the Android signing keystore.
+        //  Set this in capacitor.config.ts → plugins.MsAuthPlugin.MSAUTH_KEY_HASH
+        //
+        //  ${applicationId} is always injected automatically by Gradle (no config needed).
+        // -----------------------------------------------------------------------
+        manifestPlaceholders = [
+            MSAUTH_KEY_HASH: project.hasProperty('MSAUTH_KEY_HASH') ? MSAUTH_KEY_HASH : 'MISSING_KEY_HASH'
+        ]
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+    // Microsoft MSAL Maven feed — auto-added by this plugin, no change needed in app's build.gradle
+    maven {
+        url 'https://pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/_packaging/Duo-SDK-Feed/maven/v1'
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation project(':capacitor-android')
+    // Microsoft Authentication Library for Android — auto-resolved, no manual dependency needed
+    implementation 'com.microsoft.identity.client:msal:5.+'
+}
