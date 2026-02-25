@@ -1,438 +1,229 @@
 package com.solum.msauth;
 
-import android.app.Activity;
-import android.content.Context;
 import android.util.Log;
-
+import androidx.annotation.NonNull;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.microsoft.identity.client.AcquireTokenParameters;
-import com.microsoft.identity.client.AcquireTokenSilentParameters;
-import com.microsoft.identity.client.AuthenticationCallback;
-import com.microsoft.identity.client.IAccount;
-import com.microsoft.identity.client.IAuthenticationResult;
-import com.microsoft.identity.client.IMultipleAccountPublicClientApplication;
-import com.microsoft.identity.client.IMultipleAccountApplicationCreatedListener;
-import com.microsoft.identity.client.Prompt;
-import com.microsoft.identity.client.PublicClientApplication;
+import com.microsoft.identity.client.*;
 import com.microsoft.identity.client.exception.MsalException;
 import com.microsoft.identity.client.exception.MsalUiRequiredException;
-
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
-/**
- * SolumMsauth — Android native implementation of MsAuthPlugin.
- */
 @CapacitorPlugin(name = "MsAuthPlugin")
 public class MsAuthPlugin extends Plugin {
 
     private static final String TAG = "SolumMsauth";
 
-    // ---------------------------------------------------------------
-    // login
-    // ---------------------------------------------------------------
+    @PluginMethod
+    public void login(final PluginCall call) {
+        try {
+            ISingleAccountPublicClientApplication app = createContext(call);
+            if (app == null) return;
+
+            Prompt prompt = Prompt.SELECT_ACCOUNT;
+            if (call.hasOption("prompt")) {
+                switch (call.getString("prompt", "select_account").toLowerCase()) {
+                    case "login":   prompt = Prompt.LOGIN;   break;
+                    case "consent": prompt = Prompt.CONSENT; break;
+                    case "create":  prompt = Prompt.CREATE;  break;
+                    case "none":    prompt = Prompt.WHEN_REQUIRED; break;
+                    default:        prompt = Prompt.SELECT_ACCOUNT; break;
+                }
+            }
+
+            List<String> scopes = call.getArray("scopes").toList();
+            acquireToken(app, scopes, prompt, tokenResult -> {
+                if (tokenResult != null) {
+                    JSObject result = new JSObject();
+                    result.put("accessToken", tokenResult.getAccessToken());
+                    result.put("idToken",     tokenResult.getIdToken());
+                    result.put("scopes",      new JSONArray(java.util.Arrays.asList(tokenResult.getScopes())));
+                    call.resolve(result);
+                } else {
+                    call.reject("Unable to obtain access token");
+                }
+            });
+        } catch (Exception ex) {
+            Log.e(TAG, "login error", ex);
+            call.reject("Unable to fetch access token.");
+        }
+    }
 
     @PluginMethod
-    public void login(PluginCall call) {
-        String clientId = call.getString("clientId");
-        if (clientId == null || clientId.isEmpty()) {
-            call.reject("clientId is required");
-            return;
-        }
+    public void logout(final PluginCall call) {
+        try {
+            ISingleAccountPublicClientApplication app = createContext(call);
+            if (app == null) return;
 
-        String tenant        = call.getString("tenant", "common");
-        String authorityType = call.getString("authorityType", "AAD");
-        String authorityUrl  = call.getString("authorityUrl");
-        String keyHash       = call.getString("keyHash", "");
-        String promptStr     = call.getString("prompt", "select_account");
-
-        JSArray scopesArr = call.getArray("scopes");
-        List<String> scopes = new ArrayList<>();
-        if (scopesArr != null) {
-            try {
-                for (int i = 0; i < scopesArr.length(); i++) {
-                    scopes.add(scopesArr.getString(i));
-                }
-            } catch (JSONException e) {
-                call.reject("Invalid scopes array");
+            if (app.getCurrentAccount() == null || app.getCurrentAccount().getCurrentAccount() == null) {
+                call.reject("Nothing to sign out from.");
                 return;
             }
-        }
 
-        String configJson;
-        try {
-            configJson = buildMsalConfig(clientId, tenant, authorityType, authorityUrl, keyHash);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to build MSAL config", e);
-            call.reject("Failed to build MSAL config: " + e.getMessage());
-            return;
-        }
-
-        File configFile;
-        try {
-            configFile = writeTempConfig(configJson);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to write MSAL config file", e);
-            call.reject("Failed to write MSAL config: " + e.getMessage());
-            return;
-        }
-
-        Prompt prompt = resolvePrompt(promptStr);
-        boolean isSilentOnly = "none".equalsIgnoreCase(promptStr);
-
-        Activity activity = getActivity();
-        Context context   = getContext();
-
-        PublicClientApplication.createMultipleAccountPublicClientApplication(
-            context,
-            configFile,
-            new IMultipleAccountApplicationCreatedListener() {
+            app.signOut(new ISingleAccountPublicClientApplication.SignOutCallback() {
                 @Override
-                public void onCreated(IMultipleAccountPublicClientApplication application) {
-                    performMultiAccountLogin(call, application, scopes, prompt, isSilentOnly, activity);
+                public void onSignOut() {
+                    call.resolve();
                 }
 
                 @Override
-                public void onError(MsalException exception) {
-                    Log.e(TAG, "MSAL application creation error", exception);
-                    call.reject("MSAL init error: " + exception.getMessage());
+                public void onError(@NonNull MsalException ex) {
+                    Log.e(TAG, "Logout error", ex);
+                    call.reject("Unable to sign out.");
                 }
-            }
-        );
+            });
+        } catch (Exception ex) {
+            Log.e(TAG, "logout error", ex);
+            call.reject("Unable to fetch context.");
+        }
     }
-
-    // ---------------------------------------------------------------
-    // logout
-    // ---------------------------------------------------------------
 
     @PluginMethod
-    public void logout(PluginCall call) {
-        String clientId = call.getString("clientId");
-        if (clientId == null || clientId.isEmpty()) {
-            call.reject("clientId is required");
-            return;
-        }
-        String tenant        = call.getString("tenant", "common");
-        String authorityType = call.getString("authorityType", "AAD");
-        String authorityUrl  = call.getString("authorityUrl");
-        String keyHash       = call.getString("keyHash", "");
-
-        String configJson;
-        try {
-            configJson = buildMsalConfig(clientId, tenant, authorityType, authorityUrl, keyHash);
-        } catch (Exception e) {
-            call.reject("Failed to build MSAL config: " + e.getMessage());
-            return;
-        }
-
-        File configFile;
-        try {
-            configFile = writeTempConfig(configJson);
-        } catch (IOException e) {
-            call.reject("Failed to write MSAL config: " + e.getMessage());
-            return;
-        }
-
-        Context context = getContext();
-
-        PublicClientApplication.createMultipleAccountPublicClientApplication(
-            context,
-            configFile,
-            new IMultipleAccountApplicationCreatedListener() {
-                @Override
-                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
-                    try {
-                        List<IAccount> accounts = multiApp.getAccounts();
-                        if (accounts.isEmpty()) {
-                            call.reject("Nothing to sign out from.");
-                            return;
-                        }
-                        multiApp.removeAccount(accounts.get(0),
-                            new IMultipleAccountPublicClientApplication.RemoveAccountCallback() {
-                                @Override
-                                public void onRemoved() {
-                                    call.resolve();
-                                }
-
-                                @Override
-                                public void onError(MsalException exception) {
-                                    Log.e(TAG, "Logout error", exception);
-                                    call.reject("Logout failed: " + exception.getMessage());
-                                }
-                            });
-                    } catch (Exception e) {
-                        Log.e(TAG, "getAccounts error during logout", e);
-                        call.reject("Logout error: " + e.getMessage());
-                    }
-                }
-
-                @Override
-                public void onError(MsalException exception) {
-                    Log.e(TAG, "MSAL init error during logout", exception);
-                    call.reject("MSAL init error: " + exception.getMessage());
-                }
-            }
-        );
+    public void logoutAll(final PluginCall call) {
+        logout(call);
     }
 
-    // ---------------------------------------------------------------
-    // logoutAll
-    // ---------------------------------------------------------------
-
-    @PluginMethod
-    public void logoutAll(PluginCall call) {
-        String clientId = call.getString("clientId");
-        if (clientId == null || clientId.isEmpty()) {
-            call.reject("clientId is required");
-            return;
-        }
-        String tenant        = call.getString("tenant", "common");
-        String authorityType = call.getString("authorityType", "AAD");
-        String authorityUrl  = call.getString("authorityUrl");
-        String keyHash       = call.getString("keyHash", "");
-
-        String configJson;
-        try {
-            configJson = buildMsalConfig(clientId, tenant, authorityType, authorityUrl, keyHash);
-        } catch (Exception e) {
-            call.reject("Failed to build MSAL config: " + e.getMessage());
-            return;
-        }
-
-        File configFile;
-        try {
-            configFile = writeTempConfig(configJson);
-        } catch (IOException e) {
-            call.reject("Failed to write MSAL config: " + e.getMessage());
-            return;
-        }
-
-        Context context = getContext();
-
-        PublicClientApplication.createMultipleAccountPublicClientApplication(
-            context,
-            configFile,
-            new IMultipleAccountApplicationCreatedListener() {
-                @Override
-                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
-                    try {
-                        List<IAccount> accounts = multiApp.getAccounts();
-                        if (accounts.isEmpty()) {
-                            call.reject("Nothing to sign out from.");
-                            return;
-                        }
-                        final int[] remaining = { accounts.size() };
-                        for (IAccount account : accounts) {
-                            multiApp.removeAccount(account,
-                                new IMultipleAccountPublicClientApplication.RemoveAccountCallback() {
-                                    @Override
-                                    public void onRemoved() {
-                                        remaining[0]--;
-                                        if (remaining[0] == 0) call.resolve();
-                                    }
-
-                                    @Override
-                                    public void onError(MsalException exception) {
-                                        Log.e(TAG, "logoutAll account error", exception);
-                                        call.reject("Logout error: " + exception.getMessage());
-                                    }
-                                });
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "getAccounts error during logoutAll", e);
-                        call.reject("LogoutAll error: " + e.getMessage());
-                    }
-                }
-
-                @Override
-                public void onError(MsalException exception) {
-                    Log.e(TAG, "MSAL init error during logoutAll", exception);
-                    call.reject("MSAL init error: " + exception.getMessage());
-                }
-            }
-        );
-    }
-
-    // ---------------------------------------------------------------
-    // Multi-account login flow
-    // ---------------------------------------------------------------
-
-    private void performMultiAccountLogin(
-        PluginCall call,
-        IMultipleAccountPublicClientApplication app,
+    private void acquireToken(
+        ISingleAccountPublicClientApplication app,
         List<String> scopes,
         Prompt prompt,
-        boolean isSilentOnly,
-        Activity activity
-    ) {
-        try {
-            List<IAccount> accounts = app.getAccounts();
-            if (!accounts.isEmpty()) {
-                IAccount account = accounts.get(0);
+        TokenResultCallback callback
+    ) throws MsalException, InterruptedException {
+        String authority = app.getConfiguration().getDefaultAuthority().getAuthorityURL().toString();
+        ICurrentAccountResult currentAccountResult = app.getCurrentAccount();
+
+        if (currentAccountResult.getCurrentAccount() != null) {
+            try {
+                Log.d(TAG, "Attempting silent login");
                 AcquireTokenSilentParameters silentParams = new AcquireTokenSilentParameters.Builder()
-                    .fromAuthority(account.getAuthority())
-                    .forAccount(account)
                     .withScopes(scopes)
-                    .withCallback(new AuthenticationCallback() {
-                        @Override
-                        public void onSuccess(IAuthenticationResult authResult) {
-                            resolveCall(call, authResult);
-                        }
-
-                        @Override
-                        public void onError(MsalException exception) {
-                            if (exception instanceof MsalUiRequiredException) {
-                                if (isSilentOnly) {
-                                    call.reject("Silent login failed: interaction required.");
-                                    return;
-                                }
-                                acquireTokenInteractively(call, app, scopes, prompt, activity);
-                            } else {
-                                Log.e(TAG, "Silent token error", exception);
-                                call.reject("Token error: " + exception.getMessage());
-                            }
-                        }
-
-                        @Override
-                        public void onCancel() {
-                            call.reject("Login cancelled by user");
-                        }
-                    })
+                    .fromAuthority(authority)
+                    .forAccount(currentAccountResult.getCurrentAccount())
                     .build();
-                app.acquireTokenSilentAsync(silentParams);
-            } else {
-                if (isSilentOnly) {
-                    call.reject("No cached account found. Silent login not possible.");
-                    return;
-                }
-                acquireTokenInteractively(call, app, scopes, prompt, activity);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "performMultiAccountLogin error", e);
-            call.reject("Login error: " + e.getMessage());
-        }
-    }
 
-    private void acquireTokenInteractively(
-        PluginCall call,
-        IMultipleAccountPublicClientApplication app,
-        List<String> scopes,
-        Prompt prompt,
-        Activity activity
-    ) {
-        AcquireTokenParameters tokenParams = new AcquireTokenParameters.Builder()
-            .startAuthorizationFromActivity(activity)
+                IAuthenticationResult result = app.acquireTokenSilent(silentParams);
+                TokenResult tokenResult = new TokenResult();
+                tokenResult.setAccessToken(result.getAccessToken());
+                tokenResult.setIdToken(result.getAccount().getIdToken());
+                tokenResult.setScopes(result.getScope());
+                callback.tokenReceived(tokenResult);
+                return;
+            } catch (MsalUiRequiredException ex) {
+                Log.d(TAG, "Silent login failed, falling back to interactive");
+            }
+        }
+
+        Log.d(TAG, "Starting interactive login");
+        AcquireTokenParameters.Builder params = new AcquireTokenParameters.Builder()
+            .startAuthorizationFromActivity(getActivity())
             .withScopes(scopes)
             .withPrompt(prompt)
             .withCallback(new AuthenticationCallback() {
                 @Override
-                public void onSuccess(IAuthenticationResult authResult) {
-                    resolveCall(call, authResult);
-                }
-
-                @Override
-                public void onError(MsalException exception) {
-                    Log.e(TAG, "Interactive token error", exception);
-                    call.reject("Login failed: " + exception.getMessage());
-                }
-
-                @Override
                 public void onCancel() {
-                    call.reject("Login cancelled by user");
+                    callback.tokenReceived(null);
                 }
-            })
-            .build();
-        app.acquireToken(tokenParams);
+
+                @Override
+                public void onSuccess(IAuthenticationResult authResult) {
+                    TokenResult tokenResult = new TokenResult();
+                    tokenResult.setAccessToken(authResult.getAccessToken());
+                    tokenResult.setIdToken(authResult.getAccount().getIdToken());
+                    tokenResult.setScopes(authResult.getScope());
+                    callback.tokenReceived(tokenResult);
+                }
+
+                @Override
+                public void onError(MsalException ex) {
+                    Log.e(TAG, "Interactive login error", ex);
+                    callback.tokenReceived(null);
+                }
+            });
+
+        if (currentAccountResult.getCurrentAccount() != null) {
+            params.withLoginHint(currentAccountResult.getCurrentAccount().getUsername());
+        }
+
+        app.acquireToken(params.build());
     }
 
-    // ---------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------
+    private ISingleAccountPublicClientApplication createContext(PluginCall call)
+        throws MsalException, InterruptedException, IOException, JSONException {
 
-    private String buildMsalConfig(
-        String clientId,
-        String tenant,
-        String authorityType,
-        String authorityUrl,
-        String keyHash
-    ) throws JSONException {
-        JSONObject config = new JSONObject();
-        config.put("client_id", clientId);
-        config.put("authorization_user_agent", "DEFAULT");
-        config.put("redirect_uri", "msauth://" + getContext().getPackageName() + "/" + keyHash);
-        config.put("broker_redirect_uri_registered", false);
-        config.put("account_mode", "MULTIPLE");
+        String clientId         = call.getString("clientId");
+        String tenant           = call.getString("tenant");
+        String keyHash          = call.getString("keyHash");
+        String authorityUrl     = call.getString("authorityUrl");
+        String authorityTypeStr = call.getString("authorityType", "AAD");
+        String domainHint       = call.getString("domainHint");
+        Boolean brokerRedirect  = call.getBoolean("brokerRedirectUriRegistered", false);
 
+        if (clientId == null || clientId.isEmpty()) { call.reject("clientId is required"); return null; }
+        if (keyHash  == null || keyHash.isEmpty())  { call.reject("keyHash is required");  return null; }
+
+        String tenantId     = (tenant != null ? tenant : "common");
+        String effectiveUrl = (authorityUrl != null && !authorityUrl.isEmpty())
+            ? authorityUrl : "https://login.microsoftonline.com/" + tenantId;
+        String encodedHash  = URLEncoder.encode(keyHash, "UTF-8");
+        String redirectUri  = "msauth://" + getActivity().getApplicationContext().getPackageName() + "/" + encodedHash;
+
+        JSONObject config    = new JSONObject();
         JSONObject authority = new JSONObject();
-        String effectiveAuthorityUrl = (authorityUrl != null && !authorityUrl.isEmpty())
-            ? authorityUrl
-            : "https://login.microsoftonline.com/" + tenant;
 
-        if ("B2C".equalsIgnoreCase(authorityType)) {
-            authority.put("type", "B2C");
-            authority.put("authority_url", effectiveAuthorityUrl);
-            authority.put("default", true);
-        } else if ("CIAM".equalsIgnoreCase(authorityType)) {
-            authority.put("type", "CIAM");
-            authority.put("authority_url", effectiveAuthorityUrl);
-            authority.put("default", true);
-        } else {
-            authority.put("type", "AAD");
-            JSONObject jAudience = new JSONObject();
-            jAudience.put("type", "AzureADMyOrg");
-            jAudience.put("tenant_id", tenant);
-            authority.put("audience", jAudience);
-            authority.put("default", true);
+        switch (authorityTypeStr.toUpperCase()) {
+            case "B2C":
+                authority.put("type", "B2C");
+                authority.put("authority_url", effectiveUrl);
+                authority.put("default", "true");
+                break;
+            case "CIAM":
+                authority.put("type", "CIAM");
+                authority.put("authority_url", effectiveUrl);
+                break;
+            default:
+                authority.put("type", "AAD");
+                authority.put("authority_url", effectiveUrl);
+                authority.put("audience",
+                    new JSONObject().put("type", "AzureADMultipleOrgs").put("tenant_id", tenantId));
+                config.put("broker_redirect_uri_registered", brokerRedirect);
+                break;
         }
 
-        JSONArray authorities = new JSONArray();
-        authorities.put(authority);
-        config.put("authorities", authorities);
+        config.put("client_id",                clientId);
+        config.put("domain_hint",              domainHint);
+        config.put("authorization_user_agent", "DEFAULT");
+        config.put("redirect_uri",             redirectUri);
+        config.put("account_mode",             "SINGLE");
+        config.put("authorities",              new JSONArray().put(authority));
 
-        return config.toString();
+        File configFile = writeConfig(config);
+        ISingleAccountPublicClientApplication app =
+            PublicClientApplication.createSingleAccountPublicClientApplication(
+                getContext().getApplicationContext(),
+                configFile
+            );
+
+        if (!configFile.delete()) Log.w(TAG, "Unable to delete temp config file");
+        return app;
     }
 
-    private File writeTempConfig(String json) throws IOException {
-        File cacheDir = getContext().getCacheDir();
-        File configFile = new File(cacheDir, "msal_config_" + System.currentTimeMillis() + ".json");
-        try (FileWriter fw = new FileWriter(configFile)) {
-            fw.write(json);
+    private File writeConfig(JSONObject data) throws IOException {
+        File config = new File(getActivity().getFilesDir() + "auth_config.json");
+        try (FileWriter writer = new FileWriter(config, false)) {
+            writer.write(data.toString());
+            writer.flush();
         }
-        return configFile;
-    }
-
-    private Prompt resolvePrompt(String promptStr) {
-        if (promptStr == null) return Prompt.SELECT_ACCOUNT;
-        switch (promptStr.toLowerCase()) {
-            case "login":   return Prompt.LOGIN;
-            case "consent": return Prompt.CONSENT;
-            case "create":  return Prompt.CREATE;
-            default:        return Prompt.SELECT_ACCOUNT;
-        }
-    }
-
-    private void resolveCall(PluginCall call, IAuthenticationResult authResult) {
-        JSObject ret = new JSObject();
-        ret.put("accessToken", authResult.getAccessToken());
-        String idToken = authResult.getAccount().getIdToken();
-        ret.put("idToken", idToken != null ? idToken : "");
-        JSArray scopesArray = new JSArray();
-        for (String s : authResult.getScope()) {
-            scopesArray.put(s);
-        }
-        ret.put("scopes", scopesArray);
-        call.resolve(ret);
+        return config;
     }
 }
