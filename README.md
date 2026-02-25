@@ -32,58 +32,19 @@ npm install github:solumApps/solum-msal-capacitor-plugin
 npm install file:../solum-msal-capacitor-plugin
 ```
 
-### Step 2 — Add the MSAL Maven repository to `android/build.gradle`
-
-In your root `android/build.gradle`, add the Duo SDK feed inside the `allprojects` block:
-
-```groovy
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        // Required for MSAL 5.x transitive dependency: com.microsoft.device.display:display-mask
-        maven {
-            url 'https://pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/_packaging/Duo-SDK-Feed/maven/v1'
-        }
-    }
-}
-```
-
-### Step 3 — Add `BrowserTabActivity` to your app's `AndroidManifest.xml`
-
-Inside the `<application>` tag in `android/app/src/main/AndroidManifest.xml`:
-
-```xml
-<!-- MSAL BrowserTabActivity — handles OAuth2 redirect after Microsoft login -->
-<activity
-    android:name="com.microsoft.identity.client.BrowserTabActivity"
-    android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout"
-    android:exported="true">
-    <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-        <data
-            android:scheme="msauth"
-            android:host="YOUR_APP_PACKAGE_NAME"
-            android:pathPattern=".*" />
-    </intent-filter>
-</activity>
-```
-
-Replace `YOUR_APP_PACKAGE_NAME` with your app ID (e.g. `com.solum.epapersignage`).
-
-### Step 4 — Sync native projects
+### Step 2 — Sync native projects
 
 ```bash
 npx cap sync
 ```
 
-### Step 4 — iOS setup (4 steps, one-time per Xcode project)
+That's it for Android! The plugin automatically merges `BrowserTabActivity` into your app's `AndroidManifest.xml` and resolves the MSAL Maven dependencies. Zero manual edits needed.
+
+### Step 3 — iOS setup (4 steps, one-time per Xcode project)
 
 > These are Xcode project settings and only need to be done once when setting up the iOS project. They are stored in the Xcode project file and don't need repeating on fresh clones.
 
-#### 4a) Add URL scheme to `Info.plist`
+#### 3a) Add URL scheme to `Info.plist`
 
 In `ios/App/App/Info.plist`, add:
 
@@ -104,14 +65,14 @@ In `ios/App/App/Info.plist`, add:
 </array>
 ```
 
-#### 4b) Add Keychain Sharing in Xcode
+#### 3b) Add Keychain Sharing in Xcode
 
 1. Open the project in Xcode
 2. Select your **App target** → **Signing & Capabilities**
 3. Click **+ Capability** → **Keychain Sharing**
 4. Add the group: `com.microsoft.adalcache`
 
-#### 4c) Verify `AppDelegate.swift`
+#### 3c) Verify `AppDelegate.swift`
 
 If your `AppDelegate.swift` already has an `application(_:open:options:)` method, add inside it:
 
@@ -123,7 +84,7 @@ if MsAuthPlugin.checkAppOpen(url: url, options: options) {
 
 If you **don't** have that method, the plugin's `UIApplicationDelegate` extension handles it automatically — no changes needed.
 
-#### 4d) Run `pod install`
+#### 3d) Run `pod install`
 
 ```bash
 cd ios && pod install && cd ..
@@ -200,12 +161,13 @@ npm install github:solumApps/solum-msal-capacitor-plugin
 
 # 3. Update import lines (see "Usage" section above)
 
-# 4. Add the Duo SDK Maven repo to android/build.gradle (see Step 2 above)
-
-# 5. Ensure BrowserTabActivity is in your app AndroidManifest.xml (see Step 3 above)
-
-# 6. Sync
+# 4. Sync
 npx cap sync
+
+# 5. Important: Remove manual Android steps!
+#    If you previously added Duo-SDK-Feed to android/build.gradle, remove it.
+#    If you previously added BrowserTabActivity to AndroidManifest.xml, remove it.
+#    The plugin handles these automatically now.
 ```
 
 ---
@@ -271,14 +233,17 @@ The output (e.g. `YjJKs6ZnnuUT7eag1UhbBKej/1o=`) is what you register in the Azu
 
 ---
 
-## How the Android Redirect Works
+## How the Android Auto-Injection Works
 
-The plugin builds the MSAL redirect URI dynamically at runtime:
+The plugin uses advanced Gradle and manifest features to eliminate all manual Android setup:
+
+1. **Activity Injection**: The plugin's `AndroidManifest.xml` uses `${applicationId}` and `pathPattern=".*"` to dynamically inject the `BrowserTabActivity` into your app without needing variables or manual edits.
+2. **Maven Repository**: The plugin's `build.gradle` uses `rootProject.allprojects` to automatically push the required Azure DevOps Maven feed to the host app.
+
+When you call `MsAuthPlugin.login()`, the JS passes the required `keyHash` via the options object, and the native bridge dynamically requests:
 ```
 msauth://<your.package.name>/<urlEncodedKeyHash>
 ```
-
-The `BrowserTabActivity` in your `AndroidManifest.xml` uses `pathPattern=".*"` to catch any key hash without hardcoding it.
 
 ---
 
@@ -286,8 +251,7 @@ The `BrowserTabActivity` in your `AndroidManifest.xml` uses `pathPattern=".*"` t
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Android: Auth redirect fails / activity not found | `BrowserTabActivity` missing from app manifest | Add it following Step 3 in Installation |
-| Android: `display-mask` resolve error | Duo SDK Maven feed missing from `android/build.gradle` | Add it following Step 2 in Installation |
+| Android: Auth redirect fails / activity not found | Conflicting hardcoded entry in manifest | Remove any manual `BrowserTabActivity` from your app's `AndroidManifest.xml` |
 | Android: MSAL init error / config error | Invalid `authorityUrl`, `clientId`, or `keyHash` | Double-check values against Azure AD portal settings |
 | iOS: Login popup appears twice | Old `@recognizebv` plugin still installed | Uninstall old plugin, clean Xcode derived data (`Cmd+Shift+K`) |
 | iOS: `No cached account after re-launch` | Keychain group missing | Add `com.microsoft.adalcache` in Xcode Signing & Capabilities → Keychain Sharing |
