@@ -2,7 +2,6 @@ package com.solum.msauth;
 
 import android.app.Activity;
 import android.content.Context;
-import android.util.Base64;
 import android.util.Log;
 
 import com.getcapacitor.JSArray;
@@ -18,11 +17,8 @@ import com.microsoft.identity.client.IAccount;
 import com.microsoft.identity.client.IAuthenticationResult;
 import com.microsoft.identity.client.IMultipleAccountPublicClientApplication;
 import com.microsoft.identity.client.IPublicClientApplication;
-import com.microsoft.identity.client.IMultipleAccountApplicationCreatedListener;
 import com.microsoft.identity.client.Prompt;
 import com.microsoft.identity.client.PublicClientApplication;
-import com.microsoft.identity.client.PublicClientApplicationConfiguration;
-import com.microsoft.identity.client.exception.MsalClientException;
 import com.microsoft.identity.client.exception.MsalException;
 import com.microsoft.identity.client.exception.MsalUiRequiredException;
 
@@ -34,7 +30,6 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -45,11 +40,7 @@ import java.util.List;
  *     options passed by the JavaScript layer (clientId, tenant, authority
  *     URL, scopes, etc.).
  *  2. Perform interactive or silent token acquisition.
- *  3. Handle logout for single- and multi-account scenarios.
- *
- * The Android manifest entries (BrowserTabActivity) are injected
- * automatically by Gradle's manifest merger — no manual edits needed
- * in the host app's AndroidManifest.xml.
+ *  3. Handle logout for multi-account scenarios.
  */
 @CapacitorPlugin(name = "MsAuthPlugin")
 public class MsAuthPlugin extends Plugin {
@@ -87,7 +78,6 @@ public class MsAuthPlugin extends Plugin {
             }
         }
 
-        // Build MSAL config JSON
         String configJson;
         try {
             configJson = buildMsalConfig(clientId, tenant, authorityType, authorityUrl, keyHash);
@@ -97,7 +87,6 @@ public class MsAuthPlugin extends Plugin {
             return;
         }
 
-        // Write config to temp file (MSAL Android requires a file or resource)
         File configFile;
         try {
             configFile = writeTempConfig(configJson);
@@ -113,13 +102,15 @@ public class MsAuthPlugin extends Plugin {
         Activity activity = getActivity();
         Context context   = getContext();
 
-        IMultipleAccountApplicationCreatedListener createdListener =
-            new IMultipleAccountApplicationCreatedListener() {
+        PublicClientApplication.createMultipleAccountPublicClientApplication(
+            context,
+            configFile,
+            new IPublicClientApplication.ApplicationCreatedListener() {
                 @Override
-                public void onCreated(IMultipleAccountPublicClientApplication application) {
-                    performMultiAccountLogin(
-                        call, application, scopes, prompt, isSilentOnly, activity
-                    );
+                public void onCreated(IPublicClientApplication application) {
+                    IMultipleAccountPublicClientApplication multiApp =
+                        (IMultipleAccountPublicClientApplication) application;
+                    performMultiAccountLogin(call, multiApp, scopes, prompt, isSilentOnly, activity);
                 }
 
                 @Override
@@ -127,18 +118,8 @@ public class MsAuthPlugin extends Plugin {
                     Log.e(TAG, "MSAL application creation error", exception);
                     call.reject("MSAL init error: " + exception.getMessage());
                 }
-            };
-
-        try {
-            PublicClientApplication.createMultipleAccountPublicClientApplication(
-                context,
-                configFile,
-                createdListener
-            );
-        } catch (Exception e) {
-            Log.e(TAG, "createMultipleAccountPublicClientApplication threw", e);
-            call.reject("MSAL init failed: " + e.getMessage());
-        }
+            }
+        );
     }
 
     // ---------------------------------------------------------------
@@ -178,9 +159,11 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IMultipleAccountApplicationCreatedListener() {
+            new IPublicClientApplication.ApplicationCreatedListener() {
                 @Override
-                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
+                public void onCreated(IPublicClientApplication application) {
+                    IMultipleAccountPublicClientApplication multiApp =
+                        (IMultipleAccountPublicClientApplication) application;
                     try {
                         List<IAccount> accounts = multiApp.getAccounts();
                         if (accounts.isEmpty()) {
@@ -251,9 +234,11 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IMultipleAccountApplicationCreatedListener() {
+            new IPublicClientApplication.ApplicationCreatedListener() {
                 @Override
-                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
+                public void onCreated(IPublicClientApplication application) {
+                    IMultipleAccountPublicClientApplication multiApp =
+                        (IMultipleAccountPublicClientApplication) application;
                     try {
                         List<IAccount> accounts = multiApp.getAccounts();
                         if (accounts.isEmpty()) {
@@ -308,7 +293,6 @@ public class MsAuthPlugin extends Plugin {
         try {
             List<IAccount> accounts = app.getAccounts();
             if (!accounts.isEmpty()) {
-                // Try silent first
                 IAccount account = accounts.get(0);
                 AcquireTokenSilentParameters silentParams = new AcquireTokenSilentParameters.Builder()
                     .fromAuthority(account.getAuthority())
@@ -327,7 +311,6 @@ public class MsAuthPlugin extends Plugin {
                                     call.reject("Silent login failed: interaction required but silent-only mode active.");
                                     return;
                                 }
-                                // Fall back to interactive
                                 acquireTokenInteractively(call, app, scopes, prompt, activity);
                             } else {
                                 Log.e(TAG, "Silent token error", exception);
@@ -344,7 +327,6 @@ public class MsAuthPlugin extends Plugin {
 
                 app.acquireTokenSilentAsync(silentParams);
             } else {
-                // No cached account
                 if (isSilentOnly) {
                     call.reject("No cached account found. Silent login not possible.");
                     return;
@@ -391,127 +373,9 @@ public class MsAuthPlugin extends Plugin {
     }
 
     // ---------------------------------------------------------------
-    // Single-account login flow (fallback)
-    // ---------------------------------------------------------------
-
-    private void performSingleAccountLogin(
-        PluginCall call,
-        ISingleAccountPublicClientApplication app,
-        List<String> scopes,
-        Prompt prompt,
-        boolean isSilentOnly,
-        Activity activity
-    ) {
-        app.getCurrentAccountAsync(new ISingleAccountPublicClientApplication.CurrentAccountCallback() {
-            @Override
-            public void onAccountLoaded(IAccount activeAccount) {
-                if (activeAccount != null) {
-                    AcquireTokenSilentParameters silentParams = new AcquireTokenSilentParameters.Builder()
-                        .fromAuthority(activeAccount.getAuthority())
-                        .forAccount(activeAccount)
-                        .withScopes(scopes)
-                        .withCallback(new AuthenticationCallback() {
-                            @Override
-                            public void onSuccess(IAuthenticationResult authResult) {
-                                resolveCall(call, authResult);
-                            }
-
-                            @Override
-                            public void onError(MsalException exception) {
-                                if (exception instanceof MsalUiRequiredException) {
-                                    if (isSilentOnly) {
-                                        call.reject("Silent login failed: interaction required but silent-only mode active.");
-                                        return;
-                                    }
-                                    AcquireTokenParameters interactiveParams = new AcquireTokenParameters.Builder()
-                                        .startAuthorizationFromActivity(activity)
-                                        .withScopes(scopes)
-                                        .withPrompt(prompt)
-                                        .withCallback(new AuthenticationCallback() {
-                                            @Override
-                                            public void onSuccess(IAuthenticationResult authResult) {
-                                                resolveCall(call, authResult);
-                                            }
-
-                                            @Override
-                                            public void onError(MsalException ex) {
-                                                Log.e(TAG, "Interactive login error", ex);
-                                                call.reject("Login failed: " + ex.getMessage());
-                                            }
-
-                                            @Override
-                                            public void onCancel() {
-                                                call.reject("Login cancelled by user");
-                                            }
-                                        })
-                                        .build();
-                                    app.acquireToken(interactiveParams);
-                                } else {
-                                    Log.e(TAG, "Silent token error", exception);
-                                    call.reject("Token error: " + exception.getMessage());
-                                }
-                            }
-
-                            @Override
-                            public void onCancel() {
-                                call.reject("Login cancelled by user");
-                            }
-                        })
-                        .build();
-                    app.acquireTokenSilentAsync(silentParams);
-                } else {
-                    if (isSilentOnly) {
-                        call.reject("No cached account found. Silent login not possible.");
-                        return;
-                    }
-                    AcquireTokenParameters interactiveParams = new AcquireTokenParameters.Builder()
-                        .startAuthorizationFromActivity(activity)
-                        .withScopes(scopes)
-                        .withPrompt(prompt)
-                        .withCallback(new AuthenticationCallback() {
-                            @Override
-                            public void onSuccess(IAuthenticationResult authResult) {
-                                resolveCall(call, authResult);
-                            }
-
-                            @Override
-                            public void onError(MsalException exception) {
-                                Log.e(TAG, "Interactive login error", exception);
-                                call.reject("Login failed: " + exception.getMessage());
-                            }
-
-                            @Override
-                            public void onCancel() {
-                                call.reject("Login cancelled by user");
-                            }
-                        })
-                        .build();
-                    app.acquireToken(interactiveParams);
-                }
-            }
-
-            @Override
-            public void onAccountChanged(IAccount priorAccount, IAccount currentAccount) {
-                Log.d(TAG, "Account changed during login");
-            }
-
-            @Override
-            public void onError(MsalException exception) {
-                Log.e(TAG, "getCurrentAccountAsync error", exception);
-                call.reject("Unable to get current account: " + exception.getMessage());
-            }
-        });
-    }
-
-    // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
 
-    /**
-     * Builds the MSAL JSON config required by PublicClientApplication.
-     * The config is written to a temp file because the Android MSAL SDK
-     * requires a file path (rather than accepting a JSON string directly).
-     */
     private String buildMsalConfig(
         String clientId,
         String tenant,
@@ -524,11 +388,8 @@ public class MsAuthPlugin extends Plugin {
         config.put("authorization_user_agent", "DEFAULT");
         config.put("redirect_uri", "msauth://" + getContext().getPackageName() + "/" + keyHash);
         config.put("broker_redirect_uri_registered", false);
-
-        // Account mode: MULTIPLE allows caching more than one account
         config.put("account_mode", "MULTIPLE");
 
-        // Authority configuration
         JSONObject authority = new JSONObject();
         String effectiveAuthorityUrl;
 
@@ -547,7 +408,6 @@ public class MsAuthPlugin extends Plugin {
             authority.put("authority_url", effectiveAuthorityUrl);
             authority.put("default", true);
         } else {
-            // AAD
             authority.put("type", "AAD");
             JSONObject jAudience = new JSONObject();
             jAudience.put("type", "AzureADMyOrg");
@@ -563,7 +423,6 @@ public class MsAuthPlugin extends Plugin {
         return config.toString();
     }
 
-    /** Writes a JSON string to a temp file in the app's cache dir. */
     private File writeTempConfig(String json) throws IOException {
         File cacheDir = getContext().getCacheDir();
         File configFile = new File(cacheDir, "msal_config_" + System.currentTimeMillis() + ".json");
@@ -573,7 +432,6 @@ public class MsAuthPlugin extends Plugin {
         return configFile;
     }
 
-    /** Maps the JS `prompt` string to an MSAL Prompt enum. */
     private Prompt resolvePrompt(String promptStr) {
         if (promptStr == null) return Prompt.SELECT_ACCOUNT;
         switch (promptStr.toLowerCase()) {
@@ -586,7 +444,6 @@ public class MsAuthPlugin extends Plugin {
         }
     }
 
-    /** Resolves a PluginCall with the MSAL token result. */
     private void resolveCall(PluginCall call, IAuthenticationResult authResult) {
         JSObject ret = new JSObject();
         ret.put("accessToken", authResult.getAccessToken());
