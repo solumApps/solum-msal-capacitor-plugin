@@ -34,6 +34,8 @@ repositories {
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation project(':capacitor-android')
+    // Required by MSAL for AppCompatActivity-based browser tab flow
+    implementation 'androidx.appcompat:appcompat:1.6.1'
     // Microsoft Authentication Library for Android — auto-resolved, no manual dependency needed
     implementation 'com.microsoft.identity.client:msal:5.+'
 }

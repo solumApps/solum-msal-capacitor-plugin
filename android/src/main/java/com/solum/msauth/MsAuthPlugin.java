@@ -18,7 +18,7 @@ import com.microsoft.identity.client.IAccount;
 import com.microsoft.identity.client.IAuthenticationResult;
 import com.microsoft.identity.client.IMultipleAccountPublicClientApplication;
 import com.microsoft.identity.client.IPublicClientApplication;
-import com.microsoft.identity.client.ISingleAccountPublicClientApplication;
+import com.microsoft.identity.client.IMultipleAccountApplicationCreatedListener;
 import com.microsoft.identity.client.Prompt;
 import com.microsoft.identity.client.PublicClientApplication;
 import com.microsoft.identity.client.PublicClientApplicationConfiguration;
@@ -113,25 +113,13 @@ public class MsAuthPlugin extends Plugin {
         Activity activity = getActivity();
         Context context   = getContext();
 
-        IPublicClientApplication.ApplicationCreatedListener createdListener =
-            new IPublicClientApplication.ApplicationCreatedListener() {
+        IMultipleAccountApplicationCreatedListener createdListener =
+            new IMultipleAccountApplicationCreatedListener() {
                 @Override
-                public void onCreated(IPublicClientApplication application) {
-                    if (application instanceof IMultipleAccountPublicClientApplication) {
-                        IMultipleAccountPublicClientApplication multiApp =
-                            (IMultipleAccountPublicClientApplication) application;
-                        performMultiAccountLogin(
-                            call, multiApp, scopes, prompt, isSilentOnly, activity
-                        );
-                    } else if (application instanceof ISingleAccountPublicClientApplication) {
-                        ISingleAccountPublicClientApplication singleApp =
-                            (ISingleAccountPublicClientApplication) application;
-                        performSingleAccountLogin(
-                            call, singleApp, scopes, prompt, isSilentOnly, activity
-                        );
-                    } else {
-                        call.reject("Unexpected MSAL application type");
-                    }
+                public void onCreated(IMultipleAccountPublicClientApplication application) {
+                    performMultiAccountLogin(
+                        call, application, scopes, prompt, isSilentOnly, activity
+                    );
                 }
 
                 @Override
@@ -190,15 +178,9 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IPublicClientApplication.ApplicationCreatedListener() {
+            new IMultipleAccountApplicationCreatedListener() {
                 @Override
-                public void onCreated(IPublicClientApplication application) {
-                    if (!(application instanceof IMultipleAccountPublicClientApplication)) {
-                        call.reject("Unexpected MSAL application type during logout");
-                        return;
-                    }
-                    IMultipleAccountPublicClientApplication multiApp =
-                        (IMultipleAccountPublicClientApplication) application;
+                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
                     try {
                         List<IAccount> accounts = multiApp.getAccounts();
                         if (accounts.isEmpty()) {
@@ -269,15 +251,9 @@ public class MsAuthPlugin extends Plugin {
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context,
             configFile,
-            new IPublicClientApplication.ApplicationCreatedListener() {
+            new IMultipleAccountApplicationCreatedListener() {
                 @Override
-                public void onCreated(IPublicClientApplication application) {
-                    if (!(application instanceof IMultipleAccountPublicClientApplication)) {
-                        call.reject("Unexpected MSAL application type during logoutAll");
-                        return;
-                    }
-                    IMultipleAccountPublicClientApplication multiApp =
-                        (IMultipleAccountPublicClientApplication) application;
+                public void onCreated(IMultipleAccountPublicClientApplication multiApp) {
                     try {
                         List<IAccount> accounts = multiApp.getAccounts();
                         if (accounts.isEmpty()) {
